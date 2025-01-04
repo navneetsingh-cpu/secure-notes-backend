@@ -1,107 +1,143 @@
-// Package declaration: Groups the class under the `com.secure.notes.security` package.
+// Package for security configuration
 package com.secure.notes.security;
 
-// Importing necessary classes and packages for security and database initialization.
+// Importing necessary dependencies
 
-import com.secure.notes.models.AppRole; // Enum for application roles.
-import com.secure.notes.models.Role; // Model representing a Role.
-import com.secure.notes.models.User; // Model representing a User.
-import com.secure.notes.repositories.RoleRepository; // Repository interface for Role database operations.
-import com.secure.notes.repositories.UserRepository; // Repository interface for User database operations.
-import org.springframework.boot.CommandLineRunner; // For initializing data at application startup.
-import org.springframework.context.annotation.Bean; // Indicates a method produces a Spring Bean.
-import org.springframework.context.annotation.Configuration; // Marks this class as a configuration class.
-//import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity; // Enables method-level security.
-import org.springframework.security.config.annotation.web.builders.HttpSecurity; // Configures web-based security.
-import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity; // Enables web security.
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer; // Allows customization of web security settings.
-import org.springframework.security.web.SecurityFilterChain; // Defines the security filter chain.
+import com.secure.notes.models.AppRole;
+import com.secure.notes.models.Role;
+import com.secure.notes.models.User;
+import com.secure.notes.repositories.RoleRepository;
+import com.secure.notes.repositories.UserRepository;
+import com.secure.notes.security.jwt.AuthEntryPointJwt;
+import com.secure.notes.security.jwt.AuthTokenFilter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 
-import java.time.LocalDate; // Handles date operations.
+import java.time.LocalDate;
 
-import static org.springframework.security.config.Customizer.withDefaults; // Provides default security configurations.
+import static org.springframework.security.config.Customizer.withDefaults;
 
-// Marks this class as a configuration class for Spring Security.
+// Marks this class as a Spring configuration class
 @Configuration
-@EnableWebSecurity // Enables Spring Security for the application.
-//@EnableMethodSecurity(
-//        prePostEnabled = true, // Enables `@PreAuthorize` and `@PostAuthorize`.
-//        securedEnabled = true, // Enables `@Secured` annotations.
-//        jsr250Enabled = true // Enables `@RolesAllowed` annotations.
-//)
+// Enables web security for the application
+@EnableWebSecurity
+// Enables method-level security annotations
+//@EnableMethodSecurity(prePostEnabled = true, // Allows usage of @PreAuthorize annotations
+//        securedEnabled = true,               // Allows usage of @Secured annotations
+//        jsr250Enabled = true)                // Allows usage of @RolesAllowed annotations
 public class SecurityConfig {
 
-    /**
-     * Configures the default security filter chain for the application.
-     *
-     * @param http The HttpSecurity object to configure.
-     * @return A configured SecurityFilterChain bean.
-     * @throws Exception if an error occurs during configuration.
-     */
+    // Autowired entry point for handling unauthorized access
+    @Autowired
+    private AuthEntryPointJwt unauthorizedHandler;
+
+    // Bean to create an instance of the JWT token filter
+    @Bean
+    public AuthTokenFilter authenticationJwtTokenFilter() {
+        return new AuthTokenFilter();
+    }
+
+    // Bean to configure the security filter chain
     @Bean
     SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
-        // Configure all requests to require authentication.
-        http.authorizeHttpRequests((requests)
-                -> requests
-                .requestMatchers("/api/admin/**").hasRole("ADMIN")
-                .anyRequest().authenticated());
-
-        // Disable CSRF protection (not recommended for production without additional context).
+        // Configures Cross-Site Request Forgery (CSRF) protection
+//        http.csrf(csrf ->
+//                csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()) // CSRF token stored in cookies
+//                        .ignoringRequestMatchers("/api/auth/public/**")); // Public endpoints are excluded from CSRF protection
         http.csrf(AbstractHttpConfigurer::disable);
+        // Configures role-based access and authorization rules
+        http.authorizeHttpRequests((requests) ->
+                requests
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN") // Admin endpoints restricted to ADMIN role
+                        .requestMatchers("/api/csrf-token").permitAll()    // CSRF token endpoint is publicly accessible
+                        .requestMatchers("/api/auth/public/**").permitAll() // Public endpoints are accessible by all
+                        .anyRequest().authenticated());                     // All other endpoints require authentication
 
-        // Enable HTTP Basic authentication (credentials passed via headers).
+        // Configures exception handling for unauthorized access
+        http.exceptionHandling(exception ->
+                exception.authenticationEntryPoint(unauthorizedHandler)); // Handles unauthorized access attempts
+
+        // Adds a custom JWT authentication filter before the default UsernamePasswordAuthenticationFilter
+        http.addFilterBefore(authenticationJwtTokenFilter(),
+                UsernamePasswordAuthenticationFilter.class);
+
+        // Enables default form-based login and HTTP Basic authentication
+        http.formLogin(withDefaults());
         http.httpBasic(withDefaults());
 
-        // Build and return the configured security filter chain.
+        // Builds and returns the SecurityFilterChain
         return http.build();
     }
 
-    /**
-     * Initializes default roles and users in the database during application startup.
-     *
-     * @param roleRepository The repository for Role operations.
-     * @param userRepository The repository for User operations.
-     * @return A CommandLineRunner that initializes data.
-     */
+    // Bean to provide the AuthenticationManager for handling authentication
     @Bean
-    public CommandLineRunner initData(RoleRepository roleRepository, UserRepository userRepository) {
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration authenticationConfiguration) throws Exception {
+        return authenticationConfiguration.getAuthenticationManager();
+    }
+
+    // Bean to provide a password encoder using BCrypt hashing
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    // Bean to initialize default roles and users at application startup
+    @Bean
+    public CommandLineRunner initData(RoleRepository roleRepository,
+                                      UserRepository userRepository,
+                                      PasswordEncoder passwordEncoder) {
         return args -> {
-            // Ensure the existence of the "ROLE_USER" role, or create it if not present.
+            // Ensures that the USER role exists in the database
             Role userRole = roleRepository.findByRoleName(AppRole.ROLE_USER)
                     .orElseGet(() -> roleRepository.save(new Role(AppRole.ROLE_USER)));
 
-            // Ensure the existence of the "ROLE_ADMIN" role, or create it if not present.
+            // Ensures that the ADMIN role exists in the database
             Role adminRole = roleRepository.findByRoleName(AppRole.ROLE_ADMIN)
                     .orElseGet(() -> roleRepository.save(new Role(AppRole.ROLE_ADMIN)));
 
-            // Create a default user account if it doesn't already exist.
+            // Creates a default user with ROLE_USER if it does not already exist
             if (!userRepository.existsByUserName("user1")) {
-                User user1 = new User("user1", "user1@example.com", "{noop}password1"); // `{noop}` disables password encoding.
-                user1.setAccountNonLocked(false); // The account is locked.
-                user1.setAccountNonExpired(true); // The account is not expired.
-                user1.setCredentialsNonExpired(true); // Credentials are not expired.
-                user1.setEnabled(true); // The account is enabled.
-                user1.setCredentialsExpiryDate(LocalDate.now().plusYears(1)); // Sets credentials expiry date to one year from now.
-                user1.setAccountExpiryDate(LocalDate.now().plusYears(1)); // Sets account expiry date to one year from now.
-                user1.setTwoFactorEnabled(false); // Disables two-factor authentication.
-                user1.setSignUpMethod("email"); // Specifies the sign-up method.
-                user1.setRole(userRole); // Assigns the "ROLE_USER" role.
-                userRepository.save(user1); // Saves the user to the database.
+                User user1 = new User("user1", "user1@example.com",
+                        passwordEncoder.encode("password1")); // Password is securely hashed
+                user1.setAccountNonLocked(false);             // User account is locked
+                user1.setAccountNonExpired(true);             // Account is not expired
+                user1.setCredentialsNonExpired(true);         // Credentials are valid
+                user1.setEnabled(true);                       // User account is enabled
+                user1.setCredentialsExpiryDate(LocalDate.now().plusYears(1)); // Set credentials expiry date
+                user1.setAccountExpiryDate(LocalDate.now().plusYears(1));     // Set account expiry date
+                user1.setTwoFactorEnabled(false);             // Two-factor authentication is disabled
+                user1.setSignUpMethod("email");               // Indicates the sign-up method
+                user1.setRole(userRole);                      // Assigns the USER role
+                userRepository.save(user1);                   // Saves the user to the database
             }
 
-            // Create a default admin account if it doesn't already exist.
+            // Creates a default admin user with ROLE_ADMIN if it does not already exist
             if (!userRepository.existsByUserName("admin")) {
-                User admin = new User("admin", "admin@example.com", "{noop}adminPass");
-                admin.setAccountNonLocked(true); // The account is not locked.
-                admin.setAccountNonExpired(true); // The account is not expired.
-                admin.setCredentialsNonExpired(true); // Credentials are not expired.
-                admin.setEnabled(true); // The account is enabled.
-                admin.setCredentialsExpiryDate(LocalDate.now().plusYears(1)); // Sets credentials expiry date to one year from now.
-                admin.setAccountExpiryDate(LocalDate.now().plusYears(1)); // Sets account expiry date to one year from now.
-                admin.setTwoFactorEnabled(false); // Disables two-factor authentication.
-                admin.setSignUpMethod("email"); // Specifies the sign-up method.
-                admin.setRole(adminRole); // Assigns the "ROLE_ADMIN" role.
-                userRepository.save(admin); // Saves the admin to the database.
+                User admin = new User("admin", "admin@example.com",
+                        passwordEncoder.encode("adminPass")); // Password is securely hashed
+                admin.setAccountNonLocked(true);              // Admin account is not locked
+                admin.setAccountNonExpired(true);             // Account is not expired
+                admin.setCredentialsNonExpired(true);         // Credentials are valid
+                admin.setEnabled(true);                       // Admin account is enabled
+                admin.setCredentialsExpiryDate(LocalDate.now().plusYears(1)); // Set credentials expiry date
+                admin.setAccountExpiryDate(LocalDate.now().plusYears(1));     // Set account expiry date
+                admin.setTwoFactorEnabled(false);             // Two-factor authentication is disabled
+                admin.setSignUpMethod("email");               // Indicates the sign-up method
+                admin.setRole(adminRole);                     // Assigns the ADMIN role
+                userRepository.save(admin);                   // Saves the admin to the database
             }
         };
     }
